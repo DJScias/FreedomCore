@@ -2,9 +2,9 @@
 
 Class Items
 {
-    private static $DBConnection;
-    private static $WConnection;
-    private static $TM;
+    public static $DBConnection;
+    public static $WConnection;
+    public static $TM;
 
     public function __construct($VariablesArray)
     {
@@ -100,11 +100,14 @@ Class Items
                 if($Result['spellid_'.$i] != 0 && $Result['spellid_'.$i] != -1)
                 {
                     $Result['spt_translation'.$i] = Items::SpellTrigger($Result['spelltrigger_'.$i]);
-                    $Result['spell_data'.$i] = Items::GetSpellData($Result['spellid_'.$i]);
-                    if(strstr($Result['name'], $Result['spell_data'.$i]['spellname_loc0']))
+                    $Result['spell_data'.$i] = Spells::SpellInfo($Result['spellid_'.$i]);
+                    if(strstr($Result['name'], $Result['spell_data'.$i]['Name']))
                         $Result['spell_data'.$i]['SearchForCreature'] = Items::FindCreatureBySpell($Result['spellid_'.$i]);
                 }
             }
+            if($Result['socketBonus'] != 0)
+                $Result['socketBonusDescription'] = Items::SocketBonus($Result['socketBonus']);
+            $Result['itemsetinfo'] = Items::GetItemSetInfo($ItemID);
             return $Result;
         }
     }
@@ -125,6 +128,56 @@ Class Items
         return $Statement->fetch(PDO::FETCH_ASSOC)['creature'];
     }
 
+    public static function GetItemSetInfo($ItemID)
+    {
+        $Statement = Items::$DBConnection->prepare('
+        SELECT 
+            * 
+        FROM 
+            freedomcore.freedomcore_itemset fis
+        WHERE
+                fis.item1 = :itemid OR fis.item2 = :itemid OR fis.item3 = :itemid OR fis.item4 = :itemid OR fis.item5 = :itemid OR fis.item6 = :itemid OR fis.item7 = :itemid OR fis.item8 = :itemid OR fis.item9 = :itemid OR fis.item10 = :itemid
+                
+        ');
+        $Statement->bindParam(':itemid', $ItemID);
+        $Statement->execute();
+        $Result = $Statement->fetch(PDO::FETCH_ASSOC);
+
+        $ItemSetBonusWhenEquipped = array();
+        $ItemsInSet = 0;
+        for($i = 1; $i <= 10; $i++)
+            if($Result['item'.$i] != 0)
+            {
+                $Result['item'.$i] = Items::GetItemSetItemInfo($Result['item'.$i]);
+                $ItemsInSet++;
+            }
+        for($i = 1; $i <= 8; $i++)
+            if($Result['spell'.$i] != 0)
+                $Result['spell'.$i] = Items::GetItemSetSpellInfo($Result['spell'.$i]);
+        for($i = 1; $i <= 8; $i++)
+            if($Result['bonus'.$i] != 0)
+                $ItemSetBonusWhenEquipped[] = $Result['bonus'.$i];
+        for ($i = 0; $i < count($ItemSetBonusWhenEquipped); $i++)
+            $Result['setbonus'.$i] = Items::$TM->GetConfigVars('Item_Set_Bonus').' ('.$ItemSetBonusWhenEquipped[$i].') '.$Result['spell'.($i+1)]['Description'];
+        $Result['itemsinset'] = $ItemsInSet;
+        return $Result;
+    }
+
+    private static function GetItemSetItemInfo($ItemID)
+    {
+        global $FCCore;
+        $Statement = Items::$WConnection->prepare('SELECT entry, name, Quality, RequiredLevel, ItemLevel, LOWER(fi.iconname) as icon FROM item_template it LEFT JOIN '.$FCCore['Database']['database'].'.freedomcore_icons fi ON
+                it.displayid = fi.id WHERE entry = :itemid');
+        $Statement->bindParam(':itemid', $ItemID);
+        $Statement->execute();
+        return $Statement->fetch(PDO::FETCH_ASSOC);
+    }
+
+    private static function GetItemSetSpellInfo($SpellID)
+    {
+        return Spells::SpellInfo($SpellID);
+    }
+
     public static function GetItemRelatedInfo($ItemID)
     {
         $RelatedInfo = array();
@@ -133,12 +186,15 @@ Class Items
         $SoldBy = Items::GetSellerRelation($ItemID);
         $DropBy = Items::GetDropRelation($ItemID);
         $Comments = Items::GetCommentsForItem($ItemID);
+        $Disenchant = Items::GetDisenchantTable($ItemID);
         if($QuestRelation != false)
             $RelatedInfo['rewardFromQuests'][] = $QuestRelation;
         if($SoldBy != false)
             $RelatedInfo['vendors'] = $SoldBy;
         if($DropBy != false)
             $RelatedInfo['dropCreatures'] = $DropBy;
+        if($Disenchant != false)
+            $RelatedInfo['disenchantItems'] = $Disenchant;
 
         $RelatedInfo['comments'] = $Comments;
 
@@ -224,19 +280,25 @@ Class Items
         $Statement->bindParam(':subclass', $SubCategoryID);
         $Statement->execute();
         $Result['item_list'] = $Statement->fetchAll(PDO::FETCH_ASSOC);
-        for($i = 0; $i < 1; $i++)
+        if(!empty($Result['item_list']))
         {
-            $Result['category_data'] = array(
-                'name' => Items::ItemClass($Result['item_list'][$i]['class']),
-                'subname' => Items::ItemSubClass($Result['item_list'][$i]['class'], $Result['item_list'][$i]['subclass'])
-            );
+            for($i = 0; $i < 1; $i++)
+            {
+                $Result['category_data'] = array(
+                    'name' => Items::ItemClass($Result['item_list'][$i]['class']),
+                    'subname' => Items::ItemSubClass($Result['item_list'][$i]['class'], $Result['item_list'][$i]['subclass'])
+                );
+            }
         }
         $Index = 0;
-        foreach($Result['item_list'] as $Item)
+        if(!empty($Result['item_list']))
         {
-            $Result['item_list'][$Index]['subclass'] = Items::ItemSubClass($Item['class'], $Item['subclass']);
-            $Result['item_list'][$Index]['class'] = Items::ItemClass($Item['class']);
-            $Index++;
+            foreach($Result['item_list'] as $Item)
+            {
+                $Result['item_list'][$Index]['subclass'] = Items::ItemSubClass($Item['class'], $Item['subclass']);
+                $Result['item_list'][$Index]['class'] = Items::ItemClass($Item['class']);
+                $Index++;
+            }
         }
         return array('count' => Items::SelectCount('item_template', array('class' => $CategoryID, 'subclass' => $SubCategoryID)), 'items' => $Result);
     }
@@ -363,6 +425,31 @@ Class Items
         return false;
     }
 
+    private static function GetDisenchantTable($ItemID)
+    {
+        $Statement = Items::$WConnection->prepare('SELECT dlt.* FROM disenchant_loot_template dlt, item_template it WHERE it.DisenchantID = dlt.entry AND it.entry = :itemID');
+        $Statement->bindParam(':itemID', $ItemID);
+        $Statement->execute();
+        $Result = $Statement->fetchAll(PDO::FETCH_ASSOC);
+        $Index = 0;
+        foreach($Result as $Item)
+        {
+            if($Result[$Index]['Chance'] == 100)
+                $Result[$Index]['Chance_Translation'] = Items::$TM->GetConfigVars('Item_Disenchant_Probability_Guaranteed');
+            elseif($Result[$Index]['Chance'] >= 85 && $Result[$Index]['Chance'] < 100)
+                $Result[$Index]['Chance_Translation'] = Items::$TM->GetConfigVars('Item_Disenchant_Probability_High');
+            elseif($Result[$Index]['Chance'] >= 50 && $Result[$Index]['Chance'] < 85)
+                $Result[$Index]['Chance_Translation'] = Items::$TM->GetConfigVars('Item_Disenchant_Probability_Medium');
+            elseif($Result[$Index]['Chance'] > 0 && $Result[$Index]['Chance'] < 50)
+                $Result[$Index]['Chance_Translation'] = Items::$TM->GetConfigVars('Item_Disenchant_Probability_Low');
+            elseif($Result[$Index]['Chance'] == 0)
+                $Result[$Index]['Chance_Translation'] = Items::$TM->GetConfigVars('Item_Disenchant_Probability_Zero');
+            $Result[$Index]['Disenchants_Into'] = Items::GetItemSetItemInfo($Result[$Index]['Item']);
+            $Index++;
+        }
+        return $Result;
+    }
+
     private static function GetCommentsForItem($ItemID)
     {
         $Statement = Items::$DBConnection->prepare('SELECT * FROM item_comments WHERE item_id = :itemid ORDER BY id DESC');
@@ -426,7 +513,7 @@ Class Items
 
     private static function GetSpellData($SpellID)
     {
-        $Statement = Items::$DBConnection->prepare('SELECT spellID, spellname_loc0, tooltip_loc0 FROM freedomcore.freedomcore_spell where spellID = :spellid');
+        $Statement = Items::$DBConnection->prepare('SELECT spellID, durationID, spellname_loc0, tooltip_loc0 FROM freedomcore.freedomcore_spell where spellID = :spellid');
         $Statement->bindParam(':spellid', $SpellID);
         $Statement->execute();
         return $Statement->fetch(PDO::FETCH_ASSOC);
@@ -444,6 +531,27 @@ Class Items
         );
 
         return $Triggers[$TriggerID];
+    }
+
+    public static function QuestInfo($QuestID)
+    {
+        global $FCCore;
+        $Statement = Items::$WConnection->prepare('
+          SELECT
+            qt.*,
+            ff.name_loc0 as factionname
+          FROM
+            quest_template qt, '.$FCCore['Database']['database'].'.freedomcore_factions ff
+          WHERE
+            qt.RewardFactionId1 = ff.factionID
+          AND
+            id = :questid
+        ');
+        $Statement->bindParam(':questid', $QuestID);
+        $Statement->execute();
+        $Result = $Statement->fetch(PDO::FETCH_ASSOC);
+        $Result['MoneyReward'] = String::MoneyToCoins($Result['RewardOrRequiredMoney']);
+        return $Result;
     }
 
     private static function BondTranslation($BondID)
@@ -511,6 +619,36 @@ Class Items
         return $Stats[$StatID];
     }
 
+    private static function SocketBonus($BonusID)
+    {
+        $Bonuses = array(
+            2927 => '+4 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_STRENGTH'),
+            2868 => '+6 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_STAMINA'),
+            2869 => '+4 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_INTELLECT'),
+            2892 => '+4 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_STRENGTH'),
+            3263 => '+4 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_CRIT_TAKEN_MELEE_RATING'),
+            3304 => '+8 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_DODGE_RATING'),
+            3307 => '+9 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_STAMINA'),
+            3312 => '+8 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_STRENGTH'),
+            3313 => '+8 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_AGILITY'),
+            3305 => '+12 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_STAMINA'),
+            3314 => '+8 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_CRIT_TAKEN_MELEE_RATING'),
+            3353 => '+8 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_INTELLECT'),
+            3354 => '+12 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_STAMINA'),
+            3356 => '+12 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_ATTACK_POWER'),
+            3357 => '+6 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_STRENGTH'),
+            2872 => '+9 Healing',
+            3600 => '+6 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_RESILIENCE_RATING'),
+            3602 => '+7 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_SPELL_POWER'),
+            3752 => '+5 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_SPELL_POWER'),
+            3753 => '+9 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_SPELL_POWER'),
+            3766 => '+12 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_STAMINA'),
+            3877 => '+16 '.Items::$TM->GetConfigVars('Item_Stat_ITEM_MOD_ATTACK_POWER'),
+            //  => ' '.Items::$TM->GetConfigVars(''),
+        );
+        return $Bonuses[$BonusID];
+    }
+
     public static function ItemClass($ClassID)
     {
         $Classes = array(
@@ -536,7 +674,7 @@ Class Items
         return $Classes[$ClassID];
     }
 
-    public static function ItemSubClass($ClassID, $SubClassID)
+    public static function ItemSubClass($ClassID, $SubClassID, $Menu = false)
     {
         $SubClassesByClasses = array(
             '0' => array(
@@ -559,7 +697,9 @@ Class Items
                 '5' => array('subclass' => '5', 'translation' => Items::$TM->GetConfigVars('Item_SubClass_Gem_Bag')),
                 '6' => array('subclass' => '6', 'translation' => Items::$TM->GetConfigVars('Item_SubClass_Mining_Bag')),
                 '7' => array('subclass' => '7', 'translation' => Items::$TM->GetConfigVars('Item_SubClass_Leatherworking_Bag')),
-                '8' => array('subclass' => '8', 'translation' => Items::$TM->GetConfigVars('Item_SubClass_Inscription_Bag'))
+                '8' => array('subclass' => '8', 'translation' => Items::$TM->GetConfigVars('Item_SubClass_Inscription_Bag')),
+                '9' => array('subclass' => '9', 'translation' => Items::$TM->GetConfigVars('Item_SubClass_FishingBag')),
+                '10' => array('subclass' => '10', 'translation' => Items::$TM->GetConfigVars('Item_SubClass_FoodBag'))
             ),
             '2' => array(
                 '0' => array('subclass' => '0', 'translation' => Items::$TM->GetConfigVars('Item_SubClass_Axe_1H')),
@@ -650,7 +790,8 @@ Class Items
                 '7' => array('subclass' => '7', 'translation' => Items::$TM->GetConfigVars('Character_Professions_First_aid')),
                 '8' => array('subclass' => '8', 'translation' => Items::$TM->GetConfigVars('Character_Professions_Enchanting')),
                 '9' => array('subclass' => '9', 'translation' => Items::$TM->GetConfigVars('Character_Professions_Fishing')),
-                '10' => array('subclass' => '10', 'translation' => Items::$TM->GetConfigVars('Character_Professions_Jewelcrafting'))
+                '10' => array('subclass' => '10', 'translation' => Items::$TM->GetConfigVars('Character_Professions_Jewelcrafting')),
+                '11' => array('subclass' => '11', 'translation' => Items::$TM->GetConfigVars('Character_Professions_Inscription'))
             ),
             '10' => array(
                 '0' => array('subclass' => '0', 'translation' => Items::$TM->GetConfigVars('Item_SubClass_Money'))
@@ -694,8 +835,199 @@ Class Items
             )
         );
 
-        $SubClass = $SubClassesByClasses[$ClassID];
-        return $SubClass[$SubClassID];
+        if($Menu == false)
+        {
+            $SubClass = $SubClassesByClasses[$ClassID];
+            return $SubClass[$SubClassID];
+        }
+        else
+        {
+            return $SubClassesByClasses[$ClassID];
+        }
+    }
+}
+
+Class Spells
+{
+    public static function SpellInfo($SpellID)
+    {
+        $SpellArray = array();
+        $SpellData = Spells::GetSpellByID($SpellID);
+        $SpellArray['SpellID'] = $SpellData['spellID'];
+        $SpellArray['Name'] = $SpellData['spellname_loc0'];
+        $SpellArray['Description'] = Spells::ParseDescription($SpellData, $SpellData['tooltip_loc0']);
+        $SpellArray['icon'] = $SpellData['icon'];
+
+        return $SpellArray;
+    }
+
+    private static function ParseDescription($SpellData, $DescriptionString)
+    {
+        $DescriptionString = strtr($DescriptionString, array("\r" => '', "\n" => '<br />'));
+        $Modifiers = array('+', '-', '/', '*', '%', '^');
+        $SubSpells = array();
+        $ModifierWasFound = false;
+        foreach($Modifiers as $Modifier)
+        {
+            if(strstr($DescriptionString, $Modifier))
+            {
+                $Explode = explode($Modifier, substr($DescriptionString, strpos($DescriptionString, '$')));
+                $SpellID = $Explode[0];
+                $UsedModifier = $Modifier;
+                $SecondExplode = explode(';', $Explode[1]);
+                $Duration = $SecondExplode[0];
+                $ExplodedWith = ';';
+                $SubSpells[] = array(str_replace('.', '', $SecondExplode[1]));
+                $ModifierWasFound = true;
+            }
+        }
+        if($ModifierWasFound == false)
+            preg_match_all('!\$\d+\D\d?!', $DescriptionString, $SubSpells);
+                if(empty($SubSpells[0]))
+                    preg_match_all('!\$\D\d?!', $DescriptionString, $SubSpells);
+
+        $SubSpells = call_user_func_array('array_merge', $SubSpells);
+        $SubSpellsData = Spells::ParseSubSpells($SubSpells);
+        foreach($SubSpellsData as $SubSpell)
+        {
+            if($ModifierWasFound == false)
+            {
+                $ParseResult = Spells::ArgumentParser($SpellData, $SubSpell['SpellID'], $SubSpell['Argument'], $SubSpell['ArgumentValue']);
+                $Replacement = '$'.$SubSpell['SpellID'].$SubSpell['Argument'].$SubSpell['ArgumentValue'];
+                $DescriptionString = str_replace($Replacement, $ParseResult, $DescriptionString);
+            }
+            else
+            {
+                $ParseResult = Spells::ArgumentParser($SpellData, $SubSpell['SpellID'], $SubSpell['Argument'], $SubSpell['ArgumentValue'], $UsedModifier.$Duration);
+                $Replacement = '$'.$UsedModifier.$Duration.$ExplodedWith.$SecondExplode[1];
+                $DescriptionString = str_replace($Replacement, $ParseResult, $DescriptionString);
+            }
+        }
+
+
+        return $DescriptionString;
+    }
+
+    private static function ParseSubSpells($SubSpells)
+    {
+        $SpellSplitter = array('r', 'z', 'c', 's', 'o', 't', 'm', 'x', 'q', 'a', 'h', 'f', 'n', 'd', 'i', 'e', 'v', 'u', 'b', 'l', 'g');
+        $SubSpellsData = array();
+        foreach($SubSpells as $SubSpell)
+            foreach($SpellSplitter as $SplitBy)
+                if(strstr($SubSpell, $SplitBy))
+                {
+                    $Explode = explode($SplitBy, $SubSpell);;
+                    $SubSpellsData[] = array('SpellID' => str_replace('$', '', $Explode[0]), 'Argument' => $SplitBy, 'ArgumentValue' => $Explode[1]);
+                }
+        return $SubSpellsData;
+    }
+
+    private static function ArgumentParser($SpellData, $Spell, $Argument, $Value, $MathEquation = false)
+    {
+        $Modifiers = array('+', '-', '/', '*', '%', '^');
+        $Data = '';
+        switch($Argument)
+        {
+            case 's':
+                if(is_numeric($Spell))
+                    $SpellData = Spells::GetSpellByID($Spell);
+                if($MathEquation == false)
+                {
+                    $BasePoints = $SpellData['effect1BasePoints']+1;
+                    $Data = abs($BasePoints).($SpellData['effect1DieSides'] > 1 ? ' - '.abs(($BasePoints+$SpellData['effect1DieSides'])) : '');
+                }
+                else
+                {
+                    $Equation = abs($SpellData['effect1BasePoints']).$MathEquation;
+                    eval("\$BasePoints = $Equation;");
+                    $Data = abs(floor($BasePoints)).($SpellData['effect1DieSides'] > 1 ? ' - '.abs((floor($BasePoints)+$SpellData['effect1DieSides'])) : '');
+                }
+            break;
+
+            case 'u':
+                if(is_numeric($Spell))
+                    $SpellData = Spells::GetSpellByID($Spell);
+                if(isset($SpellData['effect1Aura']))
+                    $BasePoints = $SpellData['effect1Aura']+1;
+                $Data = abs($BasePoints);
+            break;
+
+            case 'd':
+                if(is_numeric($Spell))
+                {
+                    $SpellData = Spells::GetSpellDurationBySpellID($Spell);
+                    $BasePoints = ($SpellData['durationBase'] > 0 ? $SpellData['durationBase'] + 1 : 0);
+                }
+                else
+                    $BasePoints = Spells::GetSpellDurationByDurationID($SpellData['durationID']);
+
+                $Data = Spells::GetDuration($BasePoints).' '.Items::$TM->GetConfigVars('Item_Spell_DS');
+            break;
+
+            case 'a':
+                if(is_numeric($Spell))
+                    $SpellData = Spells::GetSpellRadiusBySpellID($Spell);
+
+                $BasePoints = Spells::GetSpellRadiusByRadiusID($SpellData['effect'.$Value.'radius']);
+
+                $Data = abs($BasePoints);
+            break;
+        }
+
+        return $Data;
+    }
+
+    private static function GetSpellByID($SpellID)
+    {
+        $Statement = Items::$DBConnection->prepare('SELECT fs.*, LOWER(fsi.iconname) as icon FROM freedomcore_spell fs, freedomcore_spellicons fsi WHERE fs.spellID = :spellid AND fsi.id = fs.spellicon LIMIT 1');
+        $Statement->bindParam(':spellid', $SpellID);
+        $Statement->execute();
+        return $Statement->fetch(PDO::FETCH_ASSOC);
+    }
+
+    private static function GetSpellDurationBySpellID($SpellID)
+    {
+        $Statement = Items::$DBConnection->prepare('SELECT durationBase FROM freedomcore_spell s, freedomcore_spellduration sd WHERE s.durationID = sd.durationID AND s.spellID=:spellID LIMIT 1');
+        $Statement->bindParam(':spellID', $SpellID);
+        $Statement->execute();
+        return $Statement->fetch(PDO::FETCH_ASSOC);
+    }
+
+    private static function GetSpellDurationByDurationID($DurationID)
+    {
+        $Statement = Items::$DBConnection->prepare('SELECT durationBase FROM freedomcore_spellduration WHERE durationID = :durationID LIMIT 1');
+        $Statement->bindParam(':durationID', $DurationID);
+        $Statement->execute();
+        return $Statement->fetch(PDO::FETCH_ASSOC)['durationBase'];
+    }
+
+    private static function GetSpellRadiusBySpellID($SpellID)
+    {
+        $Statement = Items::$DBConnection->prepare('SELECT effect1radius, effect2radius, effect3radius FROM freedomcore_spell WHERE spellID = :SpellID LIMIT 1');
+        $Statement->bindParam(':SpellID', $SpellID);
+        $Statement->execute();
+        return $Statement->fetch(PDO::FETCH_ASSOC);
+    }
+
+    private static function GetSpellRadiusByRadiusID($RadiusID)
+    {
+        $Statement = Items::$DBConnection->prepare('SELECT radiusBase FROM freedomcore_spellradius WHERE radiusID = :RadiusID LIMIT 1');
+        $Statement->bindParam(':RadiusID', $RadiusID);
+        $Statement->execute();
+        return $Statement->fetch(PDO::FETCH_ASSOC);
+    }
+
+    private static function GetSpellRange($RangeID)
+    {
+        $Statement = Items::$DBConnection->prepare('SELECT * FROM freedomcore_spellrange WHERE rangeID = :rangeID LIMIT 1');
+        $Statement->bindParam(':rangeID', $RangeID);
+        $Statement->execute();
+        return $Statement->fetch(PDO::FETCH_ASSOC);
+    }
+
+    private static function GetDuration($SpellDuration)
+    {
+        return round($SpellDuration/1000);
     }
 }
 

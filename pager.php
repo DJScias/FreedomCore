@@ -93,6 +93,21 @@ switch($_REQUEST['category'])
 		}
 	break;
 
+    case 'data':
+        if(String::IsNull($_REQUEST['subcategory']))
+            header('Location: /');
+        else
+        {
+            switch($_REQUEST['subcategory'])
+            {
+                case 'menu.json':
+                    Manager::LoadExtension('Menu', array($Database, $Smarty));
+                    echo Menu::GenerateMenu();
+                break;
+            }
+        }
+    break;
+
     case 'admin':
         if(String::IsNull($_REQUEST['subcategory']))
             header('Location: /');
@@ -411,6 +426,46 @@ switch($_REQUEST['category'])
                 $Smarty->assign('Page', Page::Info('community', array('bodycss' => 'server-error', 'pagetitle' => '')));
                 $Smarty->display('pages/character_notfound');
             }
+        }
+    break;
+
+    case 'spell':
+        if(String::IsNull($_REQUEST['subcategory']))
+        {
+            $ErrorDescription = ErrorHandler::ListenForError(404);
+            $Smarty->assign('Error', $ErrorDescription);
+            $Smarty->assign('Page', Page::Info('error_'.$ErrorDescription['code'], array('bodycss' => 'server-error', 'pagetitle' => $ErrorDescription['code'].' - ')));
+            $Smarty->display('pages/error_page');
+        }
+        else
+        {
+            if (!String::IsNull($_REQUEST['lastcategory']) && $_REQUEST['lastcategory'] == 'tooltip')
+            {
+                $Smarty->assign('Spell', Spells::SpellInfo($_REQUEST['subcategory']));
+                $Smarty->display('blocks/spell_tooltip');
+            }
+            else
+                header('Location: /');
+        }
+    break;
+
+    case 'quest':
+        if(String::IsNull($_REQUEST['subcategory']))
+        {
+            $ErrorDescription = ErrorHandler::ListenForError(404);
+            $Smarty->assign('Error', $ErrorDescription);
+            $Smarty->assign('Page', Page::Info('error_'.$ErrorDescription['code'], array('bodycss' => 'server-error', 'pagetitle' => $ErrorDescription['code'].' - ')));
+            $Smarty->display('pages/error_page');
+        }
+        else
+        {
+            if (!String::IsNull($_REQUEST['lastcategory']) && $_REQUEST['lastcategory'] == 'tooltip')
+            {
+                $Smarty->assign('Quest', Items::QuestInfo($_REQUEST['subcategory']));
+                $Smarty->display('blocks/quest_tooltip');
+            }
+            else
+                header('Location: /');
         }
     break;
 
